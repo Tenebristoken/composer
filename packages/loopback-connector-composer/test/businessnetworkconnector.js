@@ -1573,6 +1573,7 @@ describe('BusinessNetworkConnector', () => {
 
         it('should update an asset', ()=> {
             mockSerializer.fromJSON.onFirstCall().returns(asset);
+
             return new Promise((resolve, reject) => {
                 testConnector.update('org.acme.base.BaseAsset', { theValue: 'myId' }, {
                     $class : 'org.acme.base.BaseAsset',
@@ -1633,7 +1634,7 @@ describe('BusinessNetworkConnector', () => {
 
         it('should handle error if unsupported ID field', () => {
             return new Promise((resolve, reject) => {
-                testConnector.update('org.acme.base.BaseConcept', { doge: 'myId' }, {
+                testConnector.update('org.acme.base.BaseAsset', { doge: 'myId' }, {
                     assetId : 'myId',
                     stringValue : 'a bigger car'
                 }, { test: 'options' }, (error, result) => {
@@ -1817,7 +1818,7 @@ describe('BusinessNetworkConnector', () => {
         });
     });
 
-    describe('#destroyAll', () => {
+    describe.only('#destroyAll', () => {
 
         let mockAssetRegistry;
         let resourceToDelete;
@@ -1871,7 +1872,11 @@ describe('BusinessNetworkConnector', () => {
         });
 
         it('should handle an error when an invalid Object identifier is specified', () => {
-            mockAssetRegistry.get.rejects(new Error('get error'));
+
+            // const queryConditions = FilterParser.parseWhereCondition(where, composerModelName);
+            const queryString = 'SELECT org.acme.base.BaseAsset WHERE (theWrongValue==\'foo\')';
+            mockBusinessNetworkConnection.buildQuery.withArgs(queryString).rejects(new Error('get error'));
+
             return new Promise((resolve, reject) => {
                 testConnector.destroyAll('org.acme.base.BaseAsset', { 'theWrongValue' : 'foo' }, { test: 'options' }, (error) => {
                     if(error) {
@@ -1884,6 +1889,8 @@ describe('BusinessNetworkConnector', () => {
             .then(() => {
                 sinon.assert.calledOnce(testConnector.ensureConnected);
                 sinon.assert.calledWith(testConnector.ensureConnected, { test: 'options' });
+                sinon.assert.calledOnce(mockBusinessNetworkConnection.buildQuery);
+                sinon.assert.calledWith(mockBusinessNetworkConnection.buildQuery, queryString);
             });
         });
 

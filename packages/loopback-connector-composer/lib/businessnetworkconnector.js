@@ -401,7 +401,6 @@ class BusinessNetworkConnector extends Connector {
         return classDeclaration.getIdentifierFieldName();
     }
 
-
     /**
      * Check that the identifier provided matches that in the model.
      * @param {string} modelName The fully qualified Composer model name.
@@ -613,6 +612,7 @@ class BusinessNetworkConnector extends Connector {
     create(lbModelName, data, options, callback) {
         debug('create', lbModelName, data, options);
         let composerModelName = this.getComposerModelName(lbModelName);
+        console.log('Is this called?');
 
         // If the $class property has not been provided, add it now.
         if (!data.$class) {
@@ -752,33 +752,59 @@ class BusinessNetworkConnector extends Connector {
         if (!data.$class) {
             data.$class = composerModelName;
         }
-
-        let idField;
+        let networkConnection = null;
+        let fields, numFields;
         return this.ensureConnected(options)
             .then((businessNetworkConnection) => {
-                const keys = Object.keys(where);
-                if (keys.length === 0) {
+                 // if there is only one property or multiple high level properties, check if id is provided.
+                fields = Object.keys(where);
+                numFields = fields.length;
+                if (numFields === 0) {
                     throw new Error('The update operation without a where clause is not supported');
                 }
-                idField = keys[0];
-                if(!this.isValidId(composerModelName, idField)) {
-
-                // using where object to query the object back:
-
-                    throw new Error('The specified filter does not match the identifier in the model');
-                }
+                networkConnection = businessNetworkConnection;
+                  // Convert the JSON data into a resource.
                 return this.getRegistryForModel(businessNetworkConnection, composerModelName);
             })
             .then((registry) => {
 
-                // Convert the JSON data into a resource.
-                let serializer = this.businessNetworkDefinition.getSerializer();
-                let resource = serializer.fromJSON(data);
-                if (resource.getIdentifier() !== where[idField]) {
-                    throw new Error('The specified resource does not match the identifier in the filter');
+                // Check if the filter is a simple ID query
+                let idField = null;
+                let bFound = false;
+                // find the valid id from the list of fields
+                for( let i=0; i<numFields; i++){
+                    if(this.isValidId(composerModelName,fields[i])){
+                        idField = fields[i];
+                        bFound = true;
+                        break;
+                    }
                 }
-                return registry.update(resource);
+                // find the key in the list fields
+                if(bFound) {
 
+                    let serializer= this.businessNetworkDefinition.getSerializer();
+                    let resource = serializer.fromJSON(data);
+                    if (resource.getIdentifier() !== where[idField]) {
+                        throw new Error('The specified resource does not match the identifier in the filter');
+                    }
+                    return registry.update(resource);
+                }else {
+                    const queryConditions = FilterParser.parseWhereCondition(where, composerModelName);
+                    const queryString = 'SELECT ' + composerModelName + ' WHERE ' + queryConditions;
+                    const query = networkConnection.buildQuery(queryString);
+                    return networkConnection.query(query, {})
+                    .then((result) => {
+                        debug('Got Result:', result);
+                        let resources =  result.map((res) =>{
+                            return this.serializer.toJSON(res);
+                        });
+                        let results = this.findCommonData(resources, data);
+                        if( results.length === 0){
+                            throw new Error('No matching data is found from the filter query results');
+                        }
+                        return registry.updateAll(results);
+                    });
+                }
             })
             .then(() => {
                 callback();
@@ -793,6 +819,28 @@ class BusinessNetworkConnector extends Connector {
     }
 
     /**
+     * findCommonData finds all match items between two arrays,eg if the identifiers from two arrays are same.
+     * @param {Resource[]} resources The array of resource queried with the where filter from the business network
+     * @param {Resource[]} data The array of data to be updated from user
+     * @returns {Resource[]} data The array of data those elements match those in the resources
+     */
+    findCommonData(resources, data){
+        debug('findCommonData', resources, data);
+        let matches = [];
+        const nData = data.length;
+        const nResources = resources.length;
+        for ( let i=0; i<nData; i++){
+            for( let j=0; j<nResources; j++){
+                if ( data[i].getIdentifier === resources[j].getIdentifier ){
+                    matches.push(data[i]);
+                    break;
+                }
+            }
+        }
+        return matches;
+    }
+
+    /**
      * Destroy all instances of the specified objects in the Business Network.
      * @param {string} lbModelName The fully qualified model name.
      * @param {string} where The filter to identify the asset or participant to be removed.
@@ -804,25 +852,59 @@ class BusinessNetworkConnector extends Connector {
         debug('destroyAll', lbModelName, where, options);
         let composerModelName = this.getComposerModelName(lbModelName);
 
-        let idField, registry;
+        let registry, networkConnection;
+        let fields, nFields;
         return this.ensureConnected(options)
             .then((businessNetworkConnection) => {
-                const keys = Object.keys(where);
-                if (keys.length === 0) {
+                networkConnection = businessNetworkConnection;
+                fields = Object.keys(where);
+                nFields = fields.length;
+                // console.log('where =' + util.inspect(where));
+                if (nFields === 0) {
                     throw new Error('The destroyAll operation without a where clause is not supported');
-                }
-                idField = keys[0];
-                if(!this.isValidId(composerModelName, idField)) {
-                    throw new Error('The specified filter does not match the identifier in the model');
                 }
                 return this.getRegistryForModel(businessNetworkConnection, composerModelName);
             })
             .then((registry_) => {
                 registry = registry_;
-                return registry.get(where[idField]);
-            })
-            .then((resourceToRemove) => {
-                return registry.remove(resourceToRemove);
+
+                // Check if the filter is a simple ID query
+                let idField = null;
+                let bFound = false;
+                // find the valid id from the list of fields
+                for( let i=0; i<nFields; i++){
+                    if(this.isValidId(composerModelName,fields[i])){
+                        idField = fields[i];
+                        bFound = true;
+                        break;
+                    }
+                }
+                // find the key in the list fields
+                if(bFound) {
+                    let resource = registry.get(idField);
+                    return registry.remove(resource);
+                }else{
+                    // if there is only one property or multiple high level properties, check if id is provided.
+                    // query the resources with the where condition
+                    const queryConditions = FilterParser.parseWhereCondition(where, composerModelName);
+                    const queryString = 'SELECT ' + composerModelName + ' WHERE ' + queryConditions;
+                    const query = networkConnection.buildQuery(queryString);
+
+                    return networkConnection.query(query, {})
+                    .then((result) => {
+                        debug('Got Result:', result);
+                        return result.map((res) =>{
+
+                            return this.serializer.toJSON(res);
+                        });
+                    })
+                    .then((resourcesToRemove) => {
+                        if ( resourcesToRemove.length === 0 ){
+                            throw new Error('There is no data found with the where filter.');
+                        }
+                        return registry.removeAll(resourcesToRemove);
+                    });
+                }
             })
             .then(() => {
                 callback();
